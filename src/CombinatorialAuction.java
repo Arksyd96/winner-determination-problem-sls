@@ -12,13 +12,14 @@ public class CombinatorialAuction {
 	private int totalSize;
 	private int objectsCount;
 	private Random random;
+	private ArrayList<Integer>[] conflictMatrix;
 	
 	public CombinatorialAuction() {
 		offers = new ArrayList<>();
-		random = new Random(System.nanoTime());
+		random = new Random(System.currentTimeMillis());
 	}
 	
-	public void readFromFile(String path) throws IOException {
+	public void readOffersFromFile(String path) throws IOException {
 		List<String> lines = Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8);
 		String[] attr = lines.get(0).split(" ");
 		totalSize = Integer.parseInt(attr[0]);
@@ -33,75 +34,6 @@ public class CombinatorialAuction {
 			}
 			offers.add(offer);
 		}
-	}
-	
-	public ArrayList<Integer> findBestAssignment(String path) throws IOException {
-		ArrayList<Integer>[] cm = readConflictMatrixFromFile(path);		// Generate conflict matrix
-		ArrayList<Integer> assignment = generateSolutionFromRK(cm);		// Generate init solution
-		ArrayList<Integer> solution = new ArrayList<>();
-		float rand, max, temp, somme = 0;	int bid;
-		for(int i = 0; i < 2000; i++) {	// Max iter = 1000
-			rand = random.nextFloat();
-			if (rand < 0.3) {
-				bid = random.nextInt(totalSize);
-			} else {
-				max = 0;	bid = random.nextInt();
-				for(int k = 0; k < totalSize; k++) {
-					temp = offers.get(k).getValue();
-					if(temp > max) {
-						if(!assignment.contains(k)) {
-							max = temp;
-							bid = k;
-						}
-					}
-				}
-			}
-			for(int k = 0; k < assignment.size(); k++) {
-				if (cm[bid].contains(assignment.get(k)))
-					assignment.remove(k);
-			}
-			assignment.add(bid);
-			
-			temp = 0;
-			for(int j : assignment) {
-				temp += offers.get(j).getValue();
-			}
-			if(temp > somme) {
-				somme = temp;
-				solution = new ArrayList<Integer>(assignment);
-			}
-		}
-		return solution;
-	}
-	
-	public ArrayList<Integer> generateSolutionFromRK(ArrayList<Integer>[] cm){
-		ArrayList<Integer> assignment = new ArrayList<>();
-		float[] rkRep = new float[totalSize];
-		for(int i = 0; i < totalSize; i++)	rkRep[i] = random.nextFloat();
-		float max = rkRep[0];	int index = 0;
-		boolean completed = false;
-		boolean conflicting = false;
-		while(!completed) {
-			for (int i = 0; i < totalSize; i++) {
-				if (rkRep[i] > max) {
-					max = rkRep[i];
-					index = i;
-				}
-			}
-			max = 0;	rkRep[index] = 0;	conflicting = false;
-			for(int i : assignment) {
-				if (cm[index].contains(i)) {
-					conflicting = true;
-					break;
-				}
-			}
-			if (!conflicting) assignment.add(index);
-			completed = true;
-			for(float f : rkRep) {
-				if(f > 0)	completed = false;
-			}
-		}
-		return assignment;
 	}
 	
 	public ArrayList<Integer>[] createConflictMatrix(String path) {
@@ -131,8 +63,8 @@ public class CombinatorialAuction {
 		return conflictMatrix;
 	}
 	
-	public ArrayList<Integer>[] readConflictMatrixFromFile(String path) throws IOException{
-		ArrayList<Integer>[] conflictMatrix = new ArrayList[totalSize];
+	public void readConflictMatrixFromFile(String path) throws IOException{
+		conflictMatrix = new ArrayList[totalSize];
 		for (int i = 0; i < totalSize; i++) { 
 			conflictMatrix[i] = new ArrayList<Integer>(); 
         } 
@@ -141,12 +73,161 @@ public class CombinatorialAuction {
 			String[] objectIds = lines.get(i).split(": ")[1].split(" ");
 			for(String obj : objectIds)	conflictMatrix[i].add(Integer.parseInt(obj));
 		}
-		return conflictMatrix;
+	}
+	
+	public ArrayList<Integer> findBestAssignment(int maxiter, double wprate) throws IOException {
+		float rand, max, temp, value, newValue, bestValue = 0;	
+		int bid, maxChances = 500;
+		int bCount = 0;
+		
+		// Generate initial solution
+		ArrayList<Integer> assignment = generateRandomSolution(4);		
+		
+		// Calculating it's value
+		value = calculateValue(assignment);
+
+		System.out.println("Initiale solution is : " + assignment.toString() + " value : " + value);
+		
+		ArrayList<Integer> newAss, solution = new ArrayList<>();
+		
+		for(int i = 0; i < maxiter; i++) {
+			
+			// if < wprate, we take a random offer
+			if (random.nextDouble() < wprate) {
+				do { 
+					bid = random.nextInt(totalSize); 
+				} while(assignment.contains(bid));
+			}
+			// Else, we take the best offer we have
+			else {
+				bid = getBestOffer(assignment);
+				if(bid == 0) {
+					do { 
+						bid = random.nextInt(totalSize); 
+					} while(assignment.contains(bid));
+				} else {
+					bCount++;
+				}
+			}
+			
+			// taking original value
+			value = calculateValue(assignment);
+			
+			// Adding the bid to the assignment and removing conflicting bids
+			newAss = newAssignmentWithBid(bid, assignment);
+			newValue = calculateValue(newAss);
+			// System.out.println("New vs old : " + newValue + " " + value );
+			// Taking the best one
+			if(newValue > value) {
+				assignment = newAss;
+				value = newValue;
+			}
+			
+			// Updating best solution
+			if(value > bestValue) {
+				solution = new ArrayList<Integer>(assignment);
+				bestValue = value;
+				maxChances = 20;
+			} 
+			else {
+				maxChances--;
+				if (maxChances == 0) {
+					assignment = generateRandomSolution(4);
+					maxChances = 20;
+				}
+					
+			}
+		}
+		System.out.println("bcount : " + bCount);
+		// System.out.println(solution.toString() + " " + calculateValue(solution));
+		return solution;
+	}
+	
+	public ArrayList<Integer> generateRandomSolution(int maxSize){
+		// New assignment
+		ArrayList<Integer> assignment = new ArrayList<>();
+		
+		// RK representation (Array of random keys)
+		float[] randomKeys = new float[totalSize];
+		for(int i = 0; i < totalSize; i++)	
+			randomKeys[i] = random.nextFloat();
+		
+		float max = randomKeys[0];		// initial value of max
+		int indexOfMax = 0;
+		boolean conflicting = false;	// if Offers are conflicting
+		
+		for(int k = 0; k < totalSize; k++) {
+			// Searching for the max of random keys
+			for (int i = 0; i < totalSize; i++) {
+				if (randomKeys[i] > max) {
+					max = randomKeys[i];
+					indexOfMax = i;
+				}
+			}
+			
+			// Checking if offer at indexOfMax is conflicting with previous ones
+			conflicting = false;
+			for(int i : assignment) {
+				if (conflictMatrix[indexOfMax].contains(i)) {
+					conflicting = true;
+					break;
+				}
+			}
+			
+			// If not conflicting, we add the offer to the assignment
+			if (!conflicting) {
+				assignment.add(indexOfMax);
+				if(assignment.size() == maxSize)	break;
+			}
+			
+			// Removing key from the array for next iteration
+			max = 0;	
+			randomKeys[indexOfMax] = 0;	
+		}
+
+		return assignment;
+	}
+	
+	public float calculateValue(ArrayList<Integer> assignment) {
+		float sum = 0;
+		for(int x : assignment)
+			sum += offers.get(x).getValue();
+		return sum;
+	}
+	
+	public int getBestOffer(ArrayList<Integer> assignment) {
+		int indexOfBest = 0;
+		float max = 0, temp;
+		for(int i = 0; i < totalSize; i++) {
+			temp = offers.get(i).getValue();
+			if(temp > max && !assignment.contains(i) && !isConflicting(i, assignment)) {
+				indexOfBest = i;
+				max = temp;
+			}
+		}
+		return indexOfBest;
+	}
+	
+	public ArrayList<Integer> newAssignmentWithBid(int bid, ArrayList<Integer> assignment) {
+		ArrayList<Integer> newAss = new ArrayList<Integer>(assignment);
+		newAss.add(bid);
+		if(newAss.size() > 1)
+			newAss.removeIf(ass -> conflictMatrix[bid].contains(ass));
+		return newAss;
+	}
+	
+	public boolean isConflicting(int bid, ArrayList<Integer> assignment) {
+		for(int i : assignment) {
+			if(conflictMatrix[bid].contains(i))
+				return true;
+		}
+		return false;
 	}
 	
 	public ArrayList<Offer> getOffers(){
 		return this.offers;
 	}
+	
 	
 	@Override
 	public String toString() {
